@@ -1,0 +1,51 @@
+{
+    "Big_Nature_(155420955).jpeg": {
+        "version": 1,
+        "image": "Big_Nature_(155420955).jpeg",
+        "canvas": {
+            "width": 900,
+            "height": 600
+        },
+        "imageDimensions": {
+            "width": 2048,
+            "height": 1327
+        },
+        "imageSettings": {
+            "brightness": 0,
+            "contrast": 0,
+            "blur": 0,
+            "grayscale": false,
+            "sepia": false,
+            "rotation": 0,
+            "scaleX": 1,
+            "scaleY": 1
+        },
+        "object": {
+            "id": null,
+            "type": "TextBox",
+            "attrs": {
+                "x": 120,
+                "y": 100,
+                "draggable": true,
+                "name": "editable-object",
+                "customType": "TextBox",
+                "dynamicKey": "NAME",
+                "textValue": "Achal Sharma",
+                "textColor": "#ffffff",
+                "backgroundColor": "#111827",
+                "backgroundEnabled": true,
+                "textPadding": 10,
+                "cornerRadius": 6,
+                "fontFamily": "Arial",
+                "fontSize": 42,
+                "fontStyle": "bold",
+                "textDecoration": "",
+                "align": "left"
+            }
+        },
+        "generated_value": "Achal Sharma",
+        "generated_key": "NAME",
+        "generated_at": "2026-09-14T07:23:55.082Z",
+        "saved_at": "2026-09-14 07:23:55"
+    }
+}

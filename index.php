@@ -76,6 +76,91 @@ function loadAllEditorData($dataFile) {
     return $decoded;
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_GET['action'] ?? '') === 'export') {
+    header('Content-Type: application/json; charset=utf-8');
+
+    $imageName = basename((string) ($_GET['image'] ?? ''));
+    $filename = basename((string) ($_GET['filename'] ?? ''));
+    $contentType = strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? ''));
+
+    if ($imageName === '' || $filename === '') {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'message' => 'Missing image name or export filename.'
+        ]);
+        exit;
+    }
+
+    if ($contentType !== '' && strpos($contentType, 'image/png') !== 0) {
+        http_response_code(415);
+        echo json_encode([
+            'success' => false,
+            'message' => 'Export request must contain a PNG image.'
+        ]);
+        exit;
+    }
+
+    $pngData = file_get_contents('php://input');
+
+    if ($pngData === false || $pngData === '') {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'message' => 'No PNG data received by server.'
+        ]);
+        exit;
+    }
+
+    // Validate that the request body is actually a PNG before saving it.
+    if (substr($pngData, 0, 8) !== "\x89PNG\r\n\x1a\n") {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'message' => 'Invalid PNG data received.'
+        ]);
+        exit;
+    }
+
+    $exportDir = __DIR__ . DIRECTORY_SEPARATOR . 'export';
+
+    if (!is_dir($exportDir) && !@mkdir($exportDir, 0777, true)) {
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'message' => 'Could not create export folder. Check folder permissions.'
+        ]);
+        exit;
+    }
+
+    // Only allow PNG filenames. This prevents accidental path traversal.
+    $filename = preg_replace('/[^A-Za-z0-9._-]/', '_', $filename);
+    if (!preg_match('/\.png$/i', $filename)) {
+        $filename .= '.png';
+    }
+
+    $exportPath = $exportDir . DIRECTORY_SEPARATOR . $filename;
+    $ok = @file_put_contents($exportPath, $pngData, LOCK_EX);
+
+    if ($ok === false) {
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'message' => 'Could not save PNG in the export folder. Check folder permissions.'
+        ]);
+        exit;
+    }
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'PNG saved successfully in export folder.',
+        'filename' => $filename,
+        'path' => 'export/' . $filename,
+        'bytes' => $ok
+    ]);
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save') {
     header('Content-Type: application/json; charset=utf-8');
 
@@ -1233,6 +1318,9 @@ let zoom = 1;
 const DESIGN_WIDTH = 900;
 const DESIGN_HEIGHT = 600;
 
+let originalImageWidth = 0;
+let originalImageHeight = 0;
+
 
 function updateDynamicKeyInputForImage(imageName) {
 
@@ -1399,6 +1487,10 @@ function loadBackgroundImage() {
     const img = new Image();
 
     img.onload = function() {
+
+        // Keep the real source dimensions for final export.
+        originalImageWidth = img.naturalWidth || img.width || 0;
+        originalImageHeight = img.naturalHeight || img.height || 0;
 
         const scale = Math.min(
             DESIGN_WIDTH / img.width,
@@ -2687,10 +2779,35 @@ function loadSavedObject() {
 |
 */
 
-function downloadStagePNG(filename) {
+async function downloadStagePNG(filename) {
 
-    if (!stage) {
+    if (!stage || !backgroundImageNode) {
         throw new Error('Editor stage is not ready.');
+    }
+
+    const sourceImage = backgroundImageNode.image();
+    const sourceWidth = Number(
+        originalImageWidth ||
+        sourceImage.naturalWidth ||
+        sourceImage.width ||
+        0
+    );
+    const sourceHeight = Number(
+        originalImageHeight ||
+        sourceImage.naturalHeight ||
+        sourceImage.height ||
+        0
+    );
+
+    if (!sourceWidth || !sourceHeight) {
+        throw new Error('Could not determine original image dimensions.');
+    }
+
+    const displayWidth = Math.abs(Number(backgroundImageNode.width() || 0));
+    const displayHeight = Math.abs(Number(backgroundImageNode.height() || 0));
+
+    if (!displayWidth || !displayHeight) {
+        throw new Error('Could not determine displayed image dimensions.');
     }
 
     const wasVisible = transformer ? transformer.visible() : false;
@@ -2702,21 +2819,59 @@ function downloadStagePNG(filename) {
     stage.draw();
 
     try {
+        // The editor works on a 900x600 design canvas, but the exported PNG
+        // must be exactly the original source image dimensions.
+        // Crop to the actual image node and scale that crop back to the
+        // source resolution instead of exporting the whole editor canvas.
+        const pixelRatio = sourceWidth / displayWidth;
 
         const dataURL = stage.toDataURL({
             mimeType: 'image/png',
-            pixelRatio: 2,
+            x: backgroundImageNode.x(),
+            y: backgroundImageNode.y(),
+            width: displayWidth,
+            height: displayHeight,
+            pixelRatio: pixelRatio,
             imageSmoothingEnabled: true
         });
 
-        const link = document.createElement('a');
-        link.download = filename || ('edited-image-' + Date.now() + '.png');
-        link.href = dataURL;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
+        const blob = await (await fetch(dataURL)).blob();
 
-        return true;
+        const exportName = filename || ('edited-image-' + Date.now() + '.png');
+        const url = new URL(window.location.href);
+        url.searchParams.set('action', 'export');
+        url.searchParams.set('image', currentImage || 'image');
+        url.searchParams.set('filename', exportName);
+
+        const response = await fetch(url.toString(), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'image/png'
+            },
+            body: blob
+        });
+
+        const responseText = await response.text();
+        let result;
+
+        try {
+            result = JSON.parse(responseText);
+        } catch (parseError) {
+            console.error('Export server response:', responseText);
+            throw new Error(
+                'Server returned invalid response while exporting PNG (HTTP ' +
+                response.status + ').'
+            );
+        }
+
+        if (!response.ok || !result.success) {
+            throw new Error(
+                result.message ||
+                'Server could not save the PNG in the export folder.'
+            );
+        }
+
+        return result;
 
     } finally {
 
@@ -2825,7 +2980,7 @@ async function generateDynamicPNG() {
         objectLayer.batchDraw();
         backgroundLayer.batchDraw();
 
-        downloadStagePNG(
+        await downloadStagePNG(
             'dynamic-' + key.toLowerCase() + '-' + Date.now() + '.png'
         );
 
@@ -2844,7 +2999,7 @@ async function generateDynamicPNG() {
 }
 
 
-function exportPNG() {
+async function exportPNG() {
 
     if (!stage) {
         return;
@@ -2852,12 +3007,12 @@ function exportPNG() {
 
     try {
 
-        downloadStagePNG(
+        await downloadStagePNG(
             'edited-image-' + Date.now() + '.png'
         );
 
         setStatus(
-            'Final PNG exported successfully.'
+            'Final PNG saved in the export folder at the original image size.'
         );
 
     } catch (error) {
